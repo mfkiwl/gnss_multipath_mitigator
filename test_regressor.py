@@ -16,7 +16,18 @@ from keras.callbacks import ReduceLROnPlateau, EarlyStopping
 
 from data_generator_resample import CorrDatasetResample
 from model import DopplerRegressor
+from utils import save_model, load_model
 
+
+#%% Define metrics
+def rmse(y_true, y_pred):
+    return K.sqrt(K.mean(K.square(y_pred - y_true)))
+
+def r2(y_true, y_pred):
+    ss_res = K.sum(K.square(y_true - y_pred))
+    ss_tot = K.sum(K.square(y_true - K.mean(y_true)))
+    return (1 - ss_res / (ss_tot + K.epsilon()))
+    
 #%%
 
 discr_size_fd = 40
@@ -52,7 +63,7 @@ for multipath_option in [True, False]:
                                              delta_phase_set=delta_phase_set,		   
 									    cn0_log_set=cn0_log_set,
                                 tau=tau, dopp=dopp)
-    dataset_temp = Dataset.build(nb_samples=1000)
+    dataset_temp = Dataset.build(nb_samples=3000)
     # Concatenate and shuffle arrays
     dataset = np.concatenate((dataset, dataset_temp), axis=0)
     
@@ -66,23 +77,16 @@ X_val = np.array([x['table'] for x in data_val])
 y_dopp_train = np.array([x['delta_dopp'] for x in data_train])[...,None]
 y_dopp_val = np.array([x['delta_dopp'] for x in data_val])[...,None]
 
-y_train = y_dopp_train
-y_val = y_dopp_val
+#y_dopp_train = y_dopp_train
+#y_dopp_val = y_dopp_val
 
+#%% Train model from scratch
 model = DopplerRegressor(shape=(X_train.shape[1], X_train.shape[2], X_train.shape[3]))
 
 batch_size = 16
 train_iters = 20
 learning_rate = 1e-4
 
-def rmse(y_true, y_pred):
-    return K.sqrt(K.mean(K.square(y_pred - y_true)))
-
-def r2(y_true, y_pred):
-    ss_res = K.sum(K.square(y_true - y_pred))
-    ss_tot = K.sum(K.square(y_true - K.mean(y_true)))
-    return (1 - ss_res / (ss_tot + K.epsilon()))
-   
 model.model.compile(
         loss='mse',
 		optimizer=optimizers.Adam(lr=learning_rate),
@@ -94,8 +98,8 @@ early_stopping = EarlyStopping(patience=20, min_delta=0.0001)
 
 history = model.model.fit(
 					  x=X_train,
-					  y=y_train,
-					  validation_data=(X_val, y_val),
+					  y=y_dopp_train,
+					  validation_data=(X_val, y_dopp_val),
 					  epochs=train_iters,
 					  batch_size=batch_size,
                          callbacks=[reduce_lr, early_stopping],
@@ -104,6 +108,20 @@ history = model.model.fit(
 
 # write the logs to .json file
 history_dict = {k:[np.float64(i) for i in v] for k,v in history.history.items()}
+
+#%% Load pretrainded model
+#model = DopplerRegressor(shape=(X_train.shape[1], X_train.shape[2], X_train.shape[3]))
+#
+#batch_size = 16
+#train_iters = 20
+#learning_rate = 1e-4
+#
+#model.model.compile(
+#        loss='mse',
+#		optimizer=optimizers.Adam(lr=learning_rate),
+#		metrics=[rmse, r2])
+#
+#model.model = load_model(r'saved_models/model_dopp_v1.pkl')
 
 #%% Test model
 
@@ -126,5 +144,24 @@ for multipath_option in [True, False]:
 np.random.shuffle(dataset_test)
 X_test = np.array([x['table'] for x in dataset_test])
 
+y_dopp_test = np.array([x['delta_dopp'] for x in dataset_test])[...,None]
+#y_test = y_dopp_test
+
+y_pred = model.model.predict(x=X_test, batch_size=batch_size, verbose=1)
+print('dopp: ', r2_score(y_dopp_test, y_pred[:,0]), np.sqrt(mean_squared_error(y_pred[:,0], y_dopp_test)))
+
 #%% save model
-save_model(model.model, 'saved_models/model_dopp_v1.pkl')
+save_model(model.model, 'saved_models/model_dopp_v1_2000.pkl')
+
+
+#%% make classif-regression pipeline
+labels = {(-1000, -500): 0, (-500, 0): 1, (0, 500): 2, (500, 1000): 3}
+
+# encode y_dopp labels in dataset
+
+clf = DopplerClassifier(shape=(X_train.shape[1], X_train.shape[2], X_train.shape[3]))
+
+
+
+
+
