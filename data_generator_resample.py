@@ -64,8 +64,13 @@ class CorrDatasetResample(CorrDatasetV2):
                                                          delta_phase=delta_phasei,
                                                          alpha_att=alpha_atti,
                                                          ref_features=ref_features)
-                matrix[x:, y:] = matrix[x:, y:] + matrix_mp
-                module[x:, y:] = module[x:, y:] + module_mp
+                if x >= 0:
+                    matrix[x:, y:] = matrix[x:, y:] + matrix_mp
+                    module[x:, y:] = module[x:, y:] + module_mp
+                else:
+                    matrix[:matrix.shape[0]-abs(x), y:] = matrix[:matrix.shape[0]-abs(x), y:] + matrix_mp
+                    module[:module.shape[0]-abs(x), y:] = module[:module.shape[0]-abs(x), y:] + module_mp
+                
                 
                  # Log delta_tau/ delta_doppler 
                 data['delta_tau'] = delta_taui

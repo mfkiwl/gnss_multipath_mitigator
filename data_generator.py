@@ -7,7 +7,7 @@ import numpy as np
 import math
 from scipy import signal
 import cv2
-from sklearn.preprocessing import MinMaxScaler
+#from sklearn.preprocessing import MinMaxScaler
 
 from reference_feature_extractor import FeatureExtractor
 
@@ -27,7 +27,7 @@ class CorrDatasetV2():
         
         self.cn0_log = cn0_log # C/N0
         self.Tint = Tint
-        self.b_rf = 10**6 # RF frontend bandwidth
+#        self.b_rf = 10**6 # RF frontend bandwidth
         
         self.multipath_option = multipath_option
         self.delta_tau_interv = delta_tau_interv
@@ -41,7 +41,7 @@ class CorrDatasetV2():
         self.sign_amp = 1
         self.sign_power = 8 * self.sign_amp / self.Tint**2
         self.noise_psd = self.sign_power / 10**(0.1*self.cn0_log)
-
+        
     def sin_cos_matrix(self, multipath=False, delta_dopp=0, delta_phase=0, xk=0, yk=0):
         dopp_axis = np.linspace(start=self.dopp[0],
                                 stop=self.dopp[1],
@@ -53,8 +53,12 @@ class CorrDatasetV2():
         
         # reshape matrices in case of multipath
         if multipath:
-            cos_matrix = cos_matrix[:cos_matrix.shape[0]-xk, :cos_matrix.shape[1]-yk]
-            sin_matrix = sin_matrix[:sin_matrix.shape[0]-xk, :sin_matrix.shape[1]-yk]
+            if xk >= 0:
+                cos_matrix = cos_matrix[:cos_matrix.shape[0]-xk, :cos_matrix.shape[1]-yk]
+                sin_matrix = sin_matrix[:sin_matrix.shape[0]-xk, :sin_matrix.shape[1]-yk]
+            else:
+                cos_matrix = cos_matrix[abs(xk):, :cos_matrix.shape[1]-yk]
+                sin_matrix = sin_matrix[abs(xk):, :sin_matrix.shape[1]-yk]
         return cos_matrix, sin_matrix
             
     def noise_model(self):         
@@ -74,8 +78,7 @@ class CorrDatasetV2():
         
         # Convert tau/ doppler deviation into pixel scale
         xk = int(x.mean() + delta_dopp / (x.max() - x.min()) * self.discr_size_fd)
-        yk = int(y.mean() + delta_tau / (y.max() - y.min()) * self.scale_code) - 1
-        
+        yk = int(y.mean() + delta_tau / (y.max() - y.min()) * self.scale_code)         
         
         # Generate triangle/ sinc function
         func1 = self.sign_amp * signal.triang(self.scale_code)
@@ -87,7 +90,10 @@ class CorrDatasetV2():
         
         # Superpose 2 peaks. Weight matrix of MP peak by the matrix of principal peak 
         if multipath:
-            matrix = matrix[:matrix.shape[0]-xk, :matrix.shape[1]-yk]
+            if xk >= 0:
+                matrix = matrix[:matrix.shape[0]- xk, :matrix.shape[1]-yk]
+            else:
+                matrix = matrix[abs(xk):, :matrix.shape[1]-yk]
         
         # Split matrices in I, Q channels
         I = matrix * self.sin_cos_matrix(multipath=multipath, delta_dopp=delta_dopp, delta_phase=delta_phase, xk=xk, yk=yk)[0]
@@ -97,33 +103,36 @@ class CorrDatasetV2():
         mean = self.noise_model()[0]
         var = self.noise_model()[1]
         
+        module = np.sqrt(I**2 + Q**2)
         I += np.random.normal(mean, var, size=matrix.shape)
         Q += np.random.normal(mean, var, size=matrix.shape)
+       
+        #if ref_features:
+        #    print('check no normalization for reference')
+        #    I_norm = I[...,None]
+        #    Q_norm = Q[...,None]
+        #else:
+        I_norm = (I - module.min()) / (module.max() - module.min())
+        Q_norm = (Q - module.min()) / (module.max() - module.min())
+        module = (module - module.min()) / (module.max() - module.min())
+        #I_norm = I
+        #Q_norm = Q
+        #print('CHECK SCALE')
         
-        if ref_features:
-            print('check no normalization for reference')
-            I_norm = I[...,None]
-            Q_norm = Q[...,None]
-        else:
-            scaler = MinMaxScaler()
-            I_norm = scaler.fit_transform(I)
-            Q_norm = scaler.fit_transform(Q) 
-    
-            I_norm = I_norm[...,None]
-            Q_norm = Q_norm[...,None]
+        I_norm = I_norm[...,None]
+        Q_norm = Q_norm[...,None]
 
         matrix = np.concatenate((I_norm, Q_norm), axis=2)
-        module = I_norm**2 + Q_norm**2
-        
+       
         return matrix, module, xk, yk
 # -----------------------------------------------------------------------------
   
     def build(self, nb_samples=10, ref_features=False, sec_der=False, four_ch=False):
         data_samples = []
-        ref_data_samples = []
+#        ref_data_samples = []
         for i in range(nb_samples):
             data = {}
-            ref_data = {}
+#            ref_data = {}
               
             # Generate matrices: main, multipath
             if self.multipath_option:
@@ -132,34 +141,26 @@ class CorrDatasetV2():
                 delta_doppi = np.random.uniform(low=self.delta_dopp_interv[0], high=self.delta_dopp_interv[1])
                 alpha_atti = np.random.uniform(low=self.alpha_att_interv[0], high=self.alpha_att_interv[1])
                 
-                # generate main peak
                 matrix, module, x, y = self.generate_peak()
-                # generate multipath peak
                 matrix_mp, module_mp, x, y = self.generate_peak(multipath=self.multipath_option,
                                                          delta_dopp=delta_doppi, 
                                                          delta_tau=delta_taui,
                                                          delta_phase=self.delta_phase,
                                                          alpha_att=alpha_atti,
                                                          ref_features=ref_features)
-                matrix[x:, y:] = matrix[x:, y:] + matrix_mp
-                module[x:, y:] = module[x:, y:] + module_mp
-                
-                 # Log delta_tau/ delta_doppler 
-                data['delta_tau'] = delta_taui
-                data['delta_dopp'] = delta_doppi
-                data['alpha'] = alpha_atti
-                data['delta_phase'] = self.delta_phase
+                if x >= 0:
+                    matrix[x:, y:] = matrix[x:, y:] + matrix_mp
+                    module[x:, y:] = module[x:, y:] + module_mp
+                else:
+                    matrix[:matrix.shape[0]-abs(x), y:] = matrix[:matrix.shape[0]-abs(x), y:] + matrix_mp
+                    module[:module.shape[0]-abs(x), y:] = module[:module.shape[0]-abs(x), y:] + module_mp
                 
             else:
                 matrix, module, x, y = self.generate_peak(delta_phase=self.delta_phase, 
                                                           ref_features=ref_features)
                 
-                data['delta_tau'] = 0
-                data['delta_dopp'] = 0
-                data['alpha'] = 0
-                data['delta_phase'] = self.delta_phase
-                
             data['table'] = matrix
+            data['module'] = module[...,None]
             
             # Take into account 2nd derivative computation
             if sec_der:
@@ -174,35 +175,37 @@ class CorrDatasetV2():
                 data['label'] = 0
               
             data_samples.append(data)
+        
+        return data_samples
             
             # Compute reference features for given matrix
-            if ref_features:
-                feature_extractor = FeatureExtractor(module.squeeze())
-                ref_data['f2'] = feature_extractor.extract_f2()
-                ref_data['f3'] = feature_extractor.extract_f3(self.tau)
-                # Generate label
-                if self.multipath_option:
-                    ref_data['label'] = 1
-                else:
-                    ref_data['label'] = 0
-                ref_data_samples.append(ref_data)
+#            if ref_features:
+#                feature_extractor = FeatureExtractor(module.squeeze())
+#                ref_data['f2'] = feature_extractor.extract_f2()
+#                ref_data['f3'] = feature_extractor.extract_f3(self.tau)
+#                # Generate label
+#                if self.multipath_option:
+#                    ref_data['label'] = 1
+#                else:
+#                    ref_data['label'] = 0
+#                ref_data_samples.append(ref_data)
         
-        if self.multipath_option:
-            if ref_features:
-                self.data_samples = np.array(data_samples)
-                self.ref_data_samples = np.array(ref_data_samples)
-                return self.data_samples, self.ref_data_samples, module, delta_doppi, delta_taui, alpha_atti
-            else:
-                self.data_samples = np.array(data_samples)
-                return self.data_samples, module, delta_doppi, delta_taui, alpha_atti
-        else:
-            if ref_features:
-                self.data_samples = np.array(data_samples)
-                self.ref_data_samples = np.array(ref_data_samples)
-                return self.data_samples, self.ref_data_samples, module
-            else:
-                self.data_samples = np.array(data_samples)
-                return self.data_samples, module
+#        if self.multipath_option:
+##            if ref_features:
+##                self.data_samples = np.array(data_samples)
+##                self.ref_data_samples = np.array(ref_data_samples)
+##                return self.data_samples, self.ref_data_samples, module, delta_doppi, delta_taui, alpha_atti
+##            else:
+#            self.data_samples = np.array(data_samples)
+#            return self.data_samples, delta_doppi, delta_taui, alpha_atti
+#        else:
+##            if ref_features:
+##                self.data_samples = np.array(data_samples)
+##                self.ref_data_samples = np.array(ref_data_samples)
+##                return self.data_samples, self.ref_data_samples, module
+##            else:
+#            self.data_samples = np.array(data_samples)
+#            return self.data_samples
 
 def filter_2der(img, kernel_size):
     filt = np.array([1, -2, 1])[:, None]

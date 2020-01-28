@@ -337,7 +337,7 @@ alpha_att_interv = [config['alpha_att_min'], config['alpha_att_max']]
 delta_phase_set = list(np.array(config['delta_phase']) * np.pi / 180)
 cn0_log_set = config['cn0_log']
 
-print('CHECK JSON READ: ', delta_tau[0], delta_tau[1], delta_dopp[0], delta_dopp[1], alpha_att[0], alpha_att[1])
+#print('CHECK JSON READ: ', delta_tau[0], delta_tau[1], delta_dopp[0], delta_dopp[1], alpha_att[0], alpha_att[1])
 
 
 #for test_iter in range(20):
