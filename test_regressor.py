@@ -11,6 +11,7 @@ from keras import optimizers
 import keras_metrics
 import keras.backend as K
 from keras.callbacks import ReduceLROnPlateau, EarlyStopping
+from keras.utils import np_utils
 
 #%%
 
@@ -150,11 +151,12 @@ y_dopp_test = np.array([x['delta_dopp'] for x in dataset_test])[...,None]
 y_pred = model.model.predict(x=X_test, batch_size=batch_size, verbose=1)
 print('dopp: ', r2_score(y_dopp_test, y_pred[:,0]), np.sqrt(mean_squared_error(y_pred[:,0], y_dopp_test)))
 
-#%% save model
-save_model(model.model, 'saved_models/model_dopp_v1_2000.pkl')
+#save model
+#save_model(model.model, 'saved_models/model_dopp_v1_2000.pkl')
 
 
 #%% make classif-regression pipeline
+#%% CLASSIF PART
 # encode y_dopp labels in dataset
 labels_map = {(-1000, -500): 0, (-500, 0): 1, (0, 500): 2, (500, 1000): 3}
 labels_train = np.zeros_like(y_dopp_train)
@@ -162,6 +164,9 @@ labels_val = np.zeros_like(y_dopp_val)
 for item_key, item_value in labels_map.items():
     labels_train = np.where((y_dopp_train > item_key[0]) & (y_dopp_train <= item_key[1]), item_value, labels_train)
     labels_val = np.where((y_dopp_val > item_key[0]) & (y_dopp_val <= item_key[1]), item_value, labels_val)
+
+dummy_labels_train = np_utils.to_categorical(labels_train)
+dummy_labels_val = np_utils.to_categorical(labels_val)
     
 # train classifier
 clf = DopplerClassifier(shape=(X_train.shape[1], X_train.shape[2], X_train.shape[3]))
@@ -183,8 +188,8 @@ early_stopping = EarlyStopping(patience=20, min_delta=0.0001)
 
 history = clf.model.fit(
 					  x=X_train,
-					  y=labels_train,
-					  validation_data=(X_val, labels_val),
+					  y=dummy_labels_train,
+					  validation_data=(X_val, dummy_labels_val),
 					  epochs=train_iters,
 					  batch_size=batch_size,
                          callbacks=[reduce_lr, early_stopping],
@@ -194,6 +199,40 @@ history = clf.model.fit(
 # write the logs to .json file
 history_dict = {k:[np.float64(i) for i in v] for k,v in history.history.items()}
 
+#save_model(clf.model, 'saved_models/pipeline_clf.pkl')
 
+#%% REGRESSOR PART
+# encode y_dopp labels from categories 0...3 of 500 Hz
+y_adj_train = np.zeros_like(y_dopp_train)
+y_adj_val = np.zeros_like(y_dopp_val)
+for item_key, item_value in labels_map.items():
+    y_adj_train = np.where(labels_train == item_value, y_dopp_train - item_key[0], y_adj_train)
+    y_adj_val = np.where(labels_val == item_value, y_dopp_val - item_key[0], y_adj_val)
+    
+regr = DopplerRegressor(shape=(X_train.shape[1], X_train.shape[2], X_train.shape[3]))
 
+batch_size = 16
+train_iters = 20
+learning_rate = 1e-4
 
+regr.model.compile(
+        loss='mse',
+		optimizer=optimizers.Adam(lr=learning_rate),
+		metrics=[rmse, r2])
+
+# Define callbacks
+reduce_lr = ReduceLROnPlateau()
+early_stopping = EarlyStopping(patience=20, min_delta=0.0001)
+
+history = regr.model.fit(
+					  x=X_train,
+					  y=y_adj_train,
+					  validation_data=(X_val, y_adj_val),
+					  epochs=train_iters,
+					  batch_size=batch_size,
+                         callbacks=[reduce_lr, early_stopping],
+                         verbose=1
+				    )
+
+# write the logs to .json file
+history_dict = {k:[np.float64(i) for i in v] for k,v in history.history.items()}
